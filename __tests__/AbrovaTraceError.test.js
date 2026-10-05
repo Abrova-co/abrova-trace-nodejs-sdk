@@ -1,0 +1,416 @@
+const AbrovaTraceError = require('../lib/models/AbrovaTraceError');
+const { SDK_VERSION } = require('../lib/config/AbrovaTraceConfig');
+const os = require('os');
+
+describe('AbrovaTraceError', () => {
+  // ─── Constructor Defaults ─────────────────────────────────────────
+
+  describe('constructor defaults', () => {
+    test('sets default message to "Unknown error"', () => {
+      const err = new AbrovaTraceError();
+      expect(err.message).toBe('Unknown error');
+    });
+
+    test('sets default stack_trace to empty string', () => {
+      const err = new AbrovaTraceError();
+      expect(err.stack_trace).toBe('');
+    });
+
+    test('sets platform to "nodejs"', () => {
+      const err = new AbrovaTraceError();
+      expect(err.platform).toBe('nodejs');
+    });
+
+    test('sets default environment to "development"', () => {
+      const err = new AbrovaTraceError();
+      expect(err.environment).toBe('development');
+    });
+
+    test('sets default release to SDK_VERSION', () => {
+      const err = new AbrovaTraceError();
+      expect(err.release).toBe(SDK_VERSION);
+    });
+
+    test('sets timestamp to a valid ISO string', () => {
+      const before = new Date().toISOString();
+      const err = new AbrovaTraceError();
+      const after = new Date().toISOString();
+      expect(err.timestamp >= before).toBe(true);
+      expect(err.timestamp <= after).toBe(true);
+    });
+
+    test('sets default extra to empty object', () => {
+      const err = new AbrovaTraceError();
+      expect(err.extra).toEqual({});
+    });
+
+    test('sets default url to empty string', () => {
+      const err = new AbrovaTraceError();
+      expect(err.url).toBe('');
+    });
+
+    test('generates user_agent automatically', () => {
+      const err = new AbrovaTraceError();
+      expect(err.user_agent).toContain('AbrovaTrace-SDK/');
+      expect(err.user_agent).toContain('nodejs');
+      expect(err.user_agent).toContain(os.platform());
+    });
+  });
+
+  // ─── Constructor with Options ─────────────────────────────────────
+
+  describe('constructor with custom options', () => {
+    test('accepts custom message', () => {
+      const err = new AbrovaTraceError({ message: 'Custom error' });
+      expect(err.message).toBe('Custom error');
+    });
+
+    test('accepts custom stack_trace', () => {
+      const err = new AbrovaTraceError({ stack_trace: 'at line 42' });
+      expect(err.stack_trace).toBe('at line 42');
+    });
+
+    test('accepts custom environment', () => {
+      const err = new AbrovaTraceError({ environment: 'production' });
+      expect(err.environment).toBe('production');
+    });
+
+    test('accepts custom release', () => {
+      const err = new AbrovaTraceError({ release: '3.0.0' });
+      expect(err.release).toBe('3.0.0');
+    });
+
+    test('accepts custom timestamp', () => {
+      const ts = '2024-01-01T00:00:00.000Z';
+      const err = new AbrovaTraceError({ timestamp: ts });
+      expect(err.timestamp).toBe(ts);
+    });
+
+    test('accepts custom extra', () => {
+      const extra = { userId: 42 };
+      const err = new AbrovaTraceError({ extra });
+      expect(err.extra).toEqual({ userId: 42 });
+    });
+
+    test('accepts custom user_agent', () => {
+      const err = new AbrovaTraceError({ user_agent: 'CustomAgent/1.0' });
+      expect(err.user_agent).toBe('CustomAgent/1.0');
+    });
+
+    test('accepts custom url', () => {
+      const err = new AbrovaTraceError({ url: '/api/test' });
+      expect(err.url).toBe('/api/test');
+    });
+  });
+
+  // ─── toJSON ───────────────────────────────────────────────────────
+
+  describe('toJSON()', () => {
+    test('returns correct shape with required fields', () => {
+      const err = new AbrovaTraceError({ message: 'test', environment: 'prod' });
+      const json = err.toJSON();
+
+      expect(json).toHaveProperty('message', 'test');
+      expect(json).toHaveProperty('stack_trace');
+      expect(json).toHaveProperty('platform', 'nodejs');
+      expect(json).toHaveProperty('environment', 'prod');
+      expect(json).toHaveProperty('release_version');
+      expect(json).toHaveProperty('timestamp');
+      expect(json).toHaveProperty('user_agent');
+      expect(json).toHaveProperty('url');
+    });
+
+    test('uses release_version key (not release)', () => {
+      const err = new AbrovaTraceError({ release: '2.0.0' });
+      const json = err.toJSON();
+      expect(json.release_version).toBe('2.0.0');
+      expect(json.release).toBeUndefined();
+    });
+
+    test('extracts breadcrumbs from extra to root level', () => {
+      const breadcrumbs = [{ message: 'click' }];
+      const err = new AbrovaTraceError({ extra: { breadcrumbs, foo: 'bar' } });
+      const json = err.toJSON();
+
+      expect(json.breadcrumbs).toEqual(breadcrumbs);
+      expect(json.extra).toEqual({ foo: 'bar', _sdk: { sdk_version: SDK_VERSION } });
+      expect(json.extra.breadcrumbs).toBeUndefined();
+    });
+
+    test('extra holds only the SDK version when nothing else is left after breadcrumb extraction', () => {
+      const err = new AbrovaTraceError({ extra: { breadcrumbs: [] } });
+      const json = err.toJSON();
+      expect(json.breadcrumbs).toEqual([]);
+      expect(json.extra).toEqual({ _sdk: { sdk_version: SDK_VERSION } });
+    });
+
+    test('sends _sdk.sdk_version and keeps _sdk values the app set', () => {
+      expect(new AbrovaTraceError().toJSON().extra._sdk).toEqual({ sdk_version: SDK_VERSION });
+
+      const err = new AbrovaTraceError({ extra: { _sdk: { sdk_version: '9.9.9', custom: 1 } } });
+      expect(err.toJSON().extra._sdk).toEqual({ sdk_version: '9.9.9', custom: 1 });
+      // toJSON must not write _sdk back onto the error.
+      expect(err.extra._sdk).toEqual({ sdk_version: '9.9.9', custom: 1 });
+      expect(new AbrovaTraceError({ extra: { a: 1 } }).extra._sdk).toBeUndefined();
+    });
+
+    test('the user agent names the SDK version', () => {
+      expect(new AbrovaTraceError().toJSON().user_agent).toMatch(
+        new RegExp(`^AbrovaTrace-SDK/${SDK_VERSION.replace(/\./g, '\\.')} \\(nodejs; [^;]+; Node\\.js v[\\d.]+\\)$`)
+      );
+    });
+
+    test('does not include breadcrumbs key when none provided', () => {
+      const err = new AbrovaTraceError({ extra: {} });
+      const json = err.toJSON();
+      expect(json.breadcrumbs).toBeUndefined();
+    });
+
+    test('includes extra when it has non-breadcrumb data', () => {
+      const err = new AbrovaTraceError({ extra: { customField: 'value' } });
+      const json = err.toJSON();
+      expect(json.extra).toEqual({ customField: 'value', _sdk: { sdk_version: SDK_VERSION } });
+    });
+
+    test('does not mutate the original extra object', () => {
+      const extra = { breadcrumbs: [{ msg: 'x' }], other: 1 };
+      const err = new AbrovaTraceError({ extra });
+      err.toJSON();
+      // Original extra on the error should still have breadcrumbs
+      expect(err.extra.breadcrumbs).toEqual([{ msg: 'x' }]);
+    });
+  });
+
+  // ─── fromError ────────────────────────────────────────────────────
+
+  describe('fromError()', () => {
+    test('creates AbrovaTraceError from native Error', () => {
+      const native = new Error('native error');
+      const err = AbrovaTraceError.fromError(native);
+
+      expect(err).toBeInstanceOf(AbrovaTraceError);
+      expect(err.message).toBe('native error');
+      expect(err.stack_trace).toContain('native error');
+    });
+
+    test('uses String(error) when error.message is falsy', () => {
+      const obj = { toString: () => 'string fallback' };
+      const err = AbrovaTraceError.fromError(obj);
+      expect(err.message).toBe('string fallback');
+    });
+
+    test('passes environment and release options through', () => {
+      const err = AbrovaTraceError.fromError(new Error('x'), {
+        environment: 'staging',
+        release: '4.0.0',
+      });
+      expect(err.environment).toBe('staging');
+      expect(err.release).toBe('4.0.0');
+    });
+
+    test('passes extra options through', () => {
+      const err = AbrovaTraceError.fromError(new Error('x'), {
+        extra: { key: 'val' },
+      });
+      expect(err.extra).toEqual({ key: 'val' });
+    });
+
+    test('passes url option through', () => {
+      const err = AbrovaTraceError.fromError(new Error('x'), {
+        url: '/api/foo',
+      });
+      expect(err.url).toBe('/api/foo');
+    });
+
+    test('sets a valid timestamp', () => {
+      const before = Date.now();
+      const err = AbrovaTraceError.fromError(new Error('x'));
+      const after = Date.now();
+      const ts = new Date(err.timestamp).getTime();
+      expect(ts).toBeGreaterThanOrEqual(before);
+      expect(ts).toBeLessThanOrEqual(after);
+    });
+
+    test('generates stack from new Error() when error.stack is falsy', () => {
+      const err = AbrovaTraceError.fromError({ message: 'no stack' });
+      expect(err.stack_trace).toBeTruthy();
+    });
+  });
+
+  // ─── fromMessage ──────────────────────────────────────────────────
+
+  describe('fromMessage()', () => {
+    test('creates AbrovaTraceError from a string message', () => {
+      const err = AbrovaTraceError.fromMessage('something happened');
+      expect(err).toBeInstanceOf(AbrovaTraceError);
+      expect(err.message).toBe('something happened');
+    });
+
+    test('generates a stack trace', () => {
+      const err = AbrovaTraceError.fromMessage('msg');
+      expect(err.stack_trace).toBeTruthy();
+    });
+
+    test('passes options through', () => {
+      const err = AbrovaTraceError.fromMessage('msg', {
+        environment: 'production',
+        release: '1.2.3',
+        extra: { info: true },
+        url: '/health',
+      });
+      expect(err.environment).toBe('production');
+      expect(err.release).toBe('1.2.3');
+      expect(err.extra).toEqual({ info: true });
+      expect(err.url).toBe('/health');
+    });
+  });
+
+  // ─── setExtra / setExtras ─────────────────────────────────────────
+
+  describe('setExtra()', () => {
+    test('adds a key-value pair to extra', () => {
+      const err = new AbrovaTraceError();
+      err.setExtra('userId', 123);
+      expect(err.extra.userId).toBe(123);
+    });
+
+    test('returns the error instance for chaining', () => {
+      const err = new AbrovaTraceError();
+      const result = err.setExtra('a', 1);
+      expect(result).toBe(err);
+    });
+
+    test('overwrites existing key', () => {
+      const err = new AbrovaTraceError({ extra: { x: 'old' } });
+      err.setExtra('x', 'new');
+      expect(err.extra.x).toBe('new');
+    });
+  });
+
+  describe('setExtras()', () => {
+    test('merges multiple keys into extra', () => {
+      const err = new AbrovaTraceError();
+      err.setExtras({ a: 1, b: 2 });
+      expect(err.extra).toEqual({ a: 1, b: 2 });
+    });
+
+    test('returns the error instance for chaining', () => {
+      const err = new AbrovaTraceError();
+      const result = err.setExtras({ a: 1 });
+      expect(result).toBe(err);
+    });
+
+    test('preserves existing extra fields', () => {
+      const err = new AbrovaTraceError({ extra: { existing: true } });
+      err.setExtras({ added: true });
+      expect(err.extra).toEqual({ existing: true, added: true });
+    });
+  });
+
+  // ─── setRequestContext ────────────────────────────────────────────
+
+  describe('setRequestContext()', () => {
+    test('populates extra.request from Express-like req', () => {
+      const err = new AbrovaTraceError();
+      const req = {
+        method: 'POST',
+        url: '/api/users',
+        headers: { 'content-type': 'application/json' },
+        ip: '127.0.0.1',
+        query: { page: '1' },
+        params: { id: '42' },
+        get: jest.fn().mockReturnValue('Mozilla/5.0'),
+      };
+      err.setRequestContext(req);
+
+      expect(err.extra.request.method).toBe('POST');
+      expect(err.extra.request.url).toBe('/api/users');
+      expect(err.extra.request.ip).toBe('127.0.0.1');
+      expect(err.url).toBe('/api/users');
+      // The event's user agent stays the SDK's; the client's goes with the request.
+      expect(err.user_agent).toMatch(/^AbrovaTrace-SDK\//);
+      expect(err.extra.request.user_agent).toBe('Mozilla/5.0');
+    });
+
+    test('returns the error instance for chaining', () => {
+      const err = new AbrovaTraceError();
+      const result = err.setRequestContext({ method: 'GET', url: '/', headers: {} });
+      expect(result).toBe(err);
+    });
+
+    test('handles null req gracefully', () => {
+      const err = new AbrovaTraceError();
+      const result = err.setRequestContext(null);
+      expect(result).toBe(err);
+      expect(err.extra.request).toBeUndefined();
+    });
+
+    test('falls back to headers user-agent when req.get is not available', () => {
+      const err = new AbrovaTraceError();
+      const req = {
+        method: 'GET',
+        url: '/',
+        headers: { 'user-agent': 'FallbackAgent' },
+      };
+      err.setRequestContext(req);
+      expect(err.extra.request.user_agent).toBe('FallbackAgent');
+      expect(err.user_agent).toMatch(/^AbrovaTrace-SDK\//);
+    });
+
+    test('falls back to connection.remoteAddress when req.ip is missing', () => {
+      const err = new AbrovaTraceError();
+      const req = {
+        method: 'GET',
+        url: '/',
+        headers: {},
+        connection: { remoteAddress: '10.0.0.1' },
+      };
+      err.setRequestContext(req);
+      expect(err.extra.request.ip).toBe('10.0.0.1');
+    });
+  });
+
+  // ─── addNodeContext ───────────────────────────────────────────────
+
+  describe('addNodeContext()', () => {
+    test('adds node_context to extra', () => {
+      const err = new AbrovaTraceError();
+      err.addNodeContext();
+      const ctx = err.extra.node_context;
+
+      expect(ctx).toBeDefined();
+      expect(ctx.node_version).toBe(process.version);
+      expect(ctx.platform).toBe(os.platform());
+      expect(ctx.arch).toBe(os.arch());
+      expect(ctx.memory_usage).toBeDefined();
+      expect(typeof ctx.uptime).toBe('number');
+      expect(ctx.pid).toBe(process.pid);
+    });
+
+    test('returns the error instance for chaining', () => {
+      const err = new AbrovaTraceError();
+      const result = err.addNodeContext();
+      expect(result).toBe(err);
+    });
+
+    test('memory_usage contains rss', () => {
+      const err = new AbrovaTraceError();
+      err.addNodeContext();
+      expect(err.extra.node_context.memory_usage).toHaveProperty('rss');
+    });
+  });
+
+  // ─── _generateUserAgent ───────────────────────────────────────────
+
+  describe('user agent generation', () => {
+    test('contains SDK version', () => {
+      const err = new AbrovaTraceError();
+      expect(err.user_agent).toContain(SDK_VERSION);
+    });
+
+    test('contains Node.js version', () => {
+      const err = new AbrovaTraceError();
+      expect(err.user_agent).toContain(process.version);
+    });
+  });
+});

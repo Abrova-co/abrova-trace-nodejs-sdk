@@ -1,0 +1,356 @@
+const HttpClient = require('../lib/handlers/HttpClient');
+const AbrovaTraceError = require('../lib/models/AbrovaTraceError');
+const AbrovaTraceConfig = require('../lib/config/AbrovaTraceConfig');
+
+// We store the last request for test assertions
+let mockLastRequest = null;
+
+// We mock http/https to avoid actual network calls
+jest.mock('https', () => {
+  const { EventEmitter } = require('events');
+
+  return {
+    request: jest.fn((options, callback) => {
+      const req = new EventEmitter();
+      req.write = jest.fn();
+      req.end = jest.fn();
+      req.destroy = jest.fn();
+      // Store callback so tests can trigger response
+      req._callback = callback;
+      // Store reference for tests
+      mockLastRequest = req;
+      return req;
+    }),
+  };
+});
+
+function createConfig(overrides = {}) {
+  return new AbrovaTraceConfig({
+    apiKey: 'ab_live_testkey',
+    serverSecret: 'ab_srv_testsecret',
+    enabled: true,
+    debug: false,
+    timeout: 5000,
+    ...overrides,
+  });
+}
+
+function createMockResponse(statusCode, data = '') { // eslint-disable-line no-unused-vars
+  const { EventEmitter } = require('events');
+  const res = new EventEmitter();
+  res.statusCode = statusCode;
+  return { res, data };
+}
+
+function simulateSuccessResponse(req, statusCode = 200, data = '{"ok":true}') {
+  const { EventEmitter } = require('events');
+  const res = new EventEmitter();
+  res.statusCode = statusCode;
+  req._callback(res);
+  res.emit('data', data);
+  res.emit('end');
+}
+
+describe('HttpClient', () => {
+  let https;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    https = require('https');
+  });
+
+  // ─── Constructor ──────────────────────────────────────────────────
+
+  describe('constructor', () => {
+    test('stores config reference', () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+      expect(client.config).toBe(config);
+    });
+
+    test('sets retryAttempts to 3', () => {
+      const client = new HttpClient(createConfig());
+      expect(client.retryAttempts).toBe(3);
+    });
+
+    test('sets retryDelay to 1000', () => {
+      const client = new HttpClient(createConfig());
+      expect(client.retryDelay).toBe(1000);
+    });
+  });
+
+  // ─── sendError ────────────────────────────────────────────────────
+
+  describe('sendError()', () => {
+    test('returns disabled result when config is disabled', async () => {
+      const config = createConfig({ enabled: false });
+      const client = new HttpClient(config);
+      const error = new AbrovaTraceError({ message: 'test' });
+
+      const result = await client.sendError(error);
+
+      expect(result).toEqual({ success: false, reason: 'disabled' });
+    });
+
+    test('calls _sendWithRetry with serialized payload', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+      const error = new AbrovaTraceError({ message: 'test' });
+
+      const spy = jest.spyOn(client, '_sendWithRetry').mockResolvedValue({ success: true });
+      await client.sendError(error);
+
+      expect(spy).toHaveBeenCalledWith(
+        'https://trace.abrova.ir/api/errors',
+        expect.any(String)
+      );
+
+      const payload = JSON.parse(spy.mock.calls[0][1]);
+      expect(payload.message).toBe('test');
+      spy.mockRestore();
+    });
+  });
+
+  // ─── sendMessage ──────────────────────────────────────────────────
+
+  describe('sendMessage()', () => {
+    test('returns disabled result when config is disabled', async () => {
+      const client = new HttpClient(createConfig({ enabled: false }));
+      const result = await client.sendMessage({ message: 'x' });
+      expect(result).toEqual({ success: false, reason: 'disabled' });
+    });
+
+    test('posts to /api/messages, never /api/errors, with client info', async () => {
+      const client = new HttpClient(createConfig());
+      const spy = jest.spyOn(client, '_sendWithRetry').mockResolvedValue({ success: true });
+
+      await client.sendMessage({ message: 'hello', level: 'info', platform: 'nodejs', breadcrumbs: [] });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toBe('https://trace.abrova.ir/api/messages');
+      expect(spy.mock.calls[0][0]).not.toContain('/api/errors');
+      const payload = JSON.parse(spy.mock.calls[0][1]);
+      expect(payload).toEqual(expect.objectContaining({
+        message: 'hello',
+        level: 'info',
+        platform: 'nodejs',
+        breadcrumbs: [],
+        client: expect.objectContaining({ name: 'abrova-trace-nodejs', platform: 'nodejs' }),
+      }));
+      spy.mockRestore();
+    });
+
+    test('sends api key, server secret and User-Agent headers to the messages path', async () => {
+      const client = new HttpClient(createConfig());
+      const promise = client.sendMessage({ message: 'hdr' });
+      await Promise.resolve();
+
+      const options = https.request.mock.calls[0][0];
+      expect(options.path).toBe('/api/messages');
+      expect(options.method).toBe('POST');
+      expect(options.headers['x-api-key']).toBe('ab_live_testkey');
+      expect(options.headers['x-server-secret']).toBe('ab_srv_testsecret');
+      expect(options.headers['User-Agent']).toMatch(/^AbrovaTrace-SDK\//);
+
+      simulateSuccessResponse(mockLastRequest, 201);
+      await expect(promise).resolves.toEqual({ success: true, statusCode: 201 });
+    });
+
+    test('retries on 5xx like sendError', async () => {
+      const client = new HttpClient(createConfig());
+      client.retryDelay = 0;
+      const reqSpy = jest.spyOn(client, '_makeRequest')
+        .mockRejectedValueOnce(new Error('HTTP 503: down'))
+        .mockResolvedValueOnce({ statusCode: 201, data: '' });
+
+      const result = await client.sendMessage({ message: 'retry' });
+
+      expect(reqSpy).toHaveBeenCalledTimes(2);
+      expect(reqSpy.mock.calls[1][0]).toBe('https://trace.abrova.ir/api/messages');
+      expect(result).toEqual({ success: true, statusCode: 201 });
+    });
+  });
+
+  // ─── _shouldRetry ────────────────────────────────────────────────
+
+  describe('_shouldRetry()', () => {
+    let client;
+    beforeEach(() => {
+      client = new HttpClient(createConfig());
+    });
+
+    test('returns true for timeout errors', () => {
+      expect(client._shouldRetry(new Error('Request timeout'))).toBe(true);
+    });
+
+    test('returns true for ECONNREFUSED', () => {
+      expect(client._shouldRetry(new Error('ECONNREFUSED'))).toBe(true);
+    });
+
+    test('returns true for ENOTFOUND', () => {
+      expect(client._shouldRetry(new Error('ENOTFOUND'))).toBe(true);
+    });
+
+    test('returns true for HTTP 5xx errors', () => {
+      expect(client._shouldRetry(new Error('HTTP 500: Internal Server Error'))).toBe(true);
+      expect(client._shouldRetry(new Error('HTTP 503: Service Unavailable'))).toBe(true);
+    });
+
+    test('returns false for HTTP 4xx errors', () => {
+      expect(client._shouldRetry(new Error('HTTP 400: Bad Request'))).toBe(false);
+      expect(client._shouldRetry(new Error('HTTP 404: Not Found'))).toBe(false);
+    });
+
+    test('returns false for generic errors', () => {
+      expect(client._shouldRetry(new Error('Something else'))).toBe(false);
+    });
+  });
+
+  // ─── _delay ──────────────────────────────────────────────────────
+
+  describe('_delay()', () => {
+    test('resolves after specified ms', async () => {
+      jest.useFakeTimers();
+      const client = new HttpClient(createConfig());
+
+      let resolved = false;
+      const promise = client._delay(1000).then(() => { resolved = true; });
+
+      expect(resolved).toBe(false);
+      jest.advanceTimersByTime(1000);
+      await promise;
+      expect(resolved).toBe(true);
+
+      jest.useRealTimers();
+    });
+  });
+
+  // ─── _getUserAgent ────────────────────────────────────────────────
+
+  describe('_getUserAgent()', () => {
+    test('returns string containing AbrovaTrace-SDK', () => {
+      const client = new HttpClient(createConfig());
+      const ua = client._getUserAgent();
+      expect(ua).toContain('AbrovaTrace-SDK/');
+    });
+
+    test('includes nodejs platform', () => {
+      const client = new HttpClient(createConfig());
+      const ua = client._getUserAgent();
+      expect(ua).toContain('nodejs');
+    });
+
+    test('includes Node.js version', () => {
+      const client = new HttpClient(createConfig());
+      const ua = client._getUserAgent();
+      expect(ua).toContain(process.version);
+    });
+  });
+
+  // ─── _makeRequest ────────────────────────────────────────────────
+
+  describe('_makeRequest()', () => {
+    test('sends POST request with correct headers', () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      // Start the request (don't await, as it's waiting for response)
+      client._makeRequest('https://trace.abrova.ir/api/errors', '{"test":true}');
+
+      expect(https.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostname: 'trace.abrova.ir',
+          path: '/api/errors',
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'x-api-key': 'ab_live_testkey',
+            'x-server-secret': 'ab_srv_testsecret',
+          }),
+        }),
+        expect.any(Function)
+      );
+    });
+
+    test('resolves with statusCode and data on 2xx response', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      const promise = client._makeRequest('https://trace.abrova.ir/api/errors', '{}');
+      const req = mockLastRequest;
+      simulateSuccessResponse(req, 200, '{"id":"123"}');
+
+      const result = await promise;
+      expect(result.statusCode).toBe(200);
+      expect(result.data).toBe('{"id":"123"}');
+    });
+
+    test('resolves for 409 (duplicate) status', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      const promise = client._makeRequest('https://trace.abrova.ir/api/errors', '{}');
+      const req = mockLastRequest;
+      simulateSuccessResponse(req, 409, 'duplicate');
+
+      const result = await promise;
+      expect(result.statusCode).toBe(409);
+    });
+
+    test('rejects on 4xx non-409 status', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      const promise = client._makeRequest('https://trace.abrova.ir/api/errors', '{}');
+      const req = mockLastRequest;
+      simulateSuccessResponse(req, 400, 'bad request');
+
+      await expect(promise).rejects.toThrow('HTTP 400');
+    });
+
+    test('rejects on 5xx status', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      const promise = client._makeRequest('https://trace.abrova.ir/api/errors', '{}');
+      const req = mockLastRequest;
+      simulateSuccessResponse(req, 500, 'server error');
+
+      await expect(promise).rejects.toThrow('HTTP 500');
+    });
+
+    test('rejects on request error', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      const promise = client._makeRequest('https://trace.abrova.ir/api/errors', '{}');
+      const req = mockLastRequest;
+      req.emit('error', new Error('ECONNREFUSED'));
+
+      await expect(promise).rejects.toThrow('ECONNREFUSED');
+    });
+
+    test('rejects on timeout', async () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      const promise = client._makeRequest('https://trace.abrova.ir/api/errors', '{}');
+      const req = mockLastRequest;
+      req.emit('timeout');
+
+      await expect(promise).rejects.toThrow('Request timeout');
+      expect(req.destroy).toHaveBeenCalled();
+    });
+
+    test('writes payload and ends request', () => {
+      const config = createConfig();
+      const client = new HttpClient(config);
+
+      client._makeRequest('https://trace.abrova.ir/api/errors', '{"data":"test"}');
+      const req = mockLastRequest;
+
+      expect(req.write).toHaveBeenCalledWith('{"data":"test"}');
+      expect(req.end).toHaveBeenCalled();
+    });
+  });
+});
