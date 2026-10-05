@@ -29,6 +29,20 @@ export type ExpressLikeRequestHandler = (
   next: (error?: unknown) => void,
 ) => void;
 
+export type ExpressLikeErrorHandler = (
+  error: unknown,
+  req: ExpressLikeRequest,
+  res: unknown,
+  next: (error?: unknown) => void,
+) => void;
+
+export interface ExpressMiddleware {
+  /** Records the request (method, path, status, duration) as context and breadcrumbs */
+  requestHandler(): ExpressLikeRequestHandler;
+  /** Reports errors passed to `next(error)` */
+  errorHandler(): ExpressLikeErrorHandler;
+}
+
 export interface AbrovaTraceInitOptions {
   /** Your AbrovaTrace API key from Console (required) - format: ab_live_xxx */
   apiKey: string;
@@ -385,8 +399,8 @@ declare class AbrovaTrace {
   /** Set user context */
   static setUser(user: UserContext): void;
 
-  /** Express error handling middleware */
-  static expressMiddleware(): ExpressLikeRequestHandler;
+  /** Express middleware: `app.use(mw.requestHandler())` first, `app.use(mw.errorHandler())` last */
+  static expressMiddleware(): ExpressMiddleware;
 
   /** Get current configuration */
   static getConfig(): AbrovaTraceConfig | null;
@@ -400,7 +414,10 @@ declare class AbrovaTrace {
   /** Get current stats */
   static getStats(): Stats | null;
 
-  /** Flush pending errors before shutdown */
+  /**
+   * Send everything that is still waiting (errors, messages, logs, performance spans).
+   * Resolves true when all of it went out within the timeout (default 5000 ms), false otherwise.
+   */
   static flush(timeout?: number): Promise<boolean>;
 
   /** Close and cleanup AbrovaTrace */

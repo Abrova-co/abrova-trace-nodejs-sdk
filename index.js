@@ -34,6 +34,15 @@ class AbrovaTrace {
     this._logService = null;
     this._performanceClient = null;
     this._sampleRate = 1.0;
+    // Error and message requests that are on their way; flush() waits for them.
+    this._pendingSends = new Set();
+  }
+
+  _trackSend(promise) {
+    this._pendingSends.add(promise);
+    const done = () => this._pendingSends.delete(promise);
+    promise.then(done, done);
+    return promise;
   }
 
   static get instance() {
@@ -195,7 +204,12 @@ class AbrovaTrace {
   // Express middleware
   static expressMiddleware() {
     if (!AbrovaTrace._instance?._isInitialized) {
-      return (req, res, next) => next(); // No-op if not initialized
+      // Not initialized: handlers that do nothing, in the same shape as the
+      // real middleware (and still callable as a plain request handler).
+      const noop = (req, res, next) => next();
+      noop.requestHandler = () => (req, res, next) => next();
+      noop.errorHandler = () => (error, req, res, next) => next(error);
+      return noop;
     }
     return createExpressMiddleware(AbrovaTrace._instance);
   }
@@ -273,7 +287,7 @@ class AbrovaTrace {
     }
 
     // Send error
-    const result = await this._httpClient.sendError(abrovaTraceError);
+    const result = await this._trackSend(this._httpClient.sendError(abrovaTraceError));
 
     if (!result.success && this._config.debug) {
       console.log(`[AbrovaTrace] Failed to send error: ${result.error || result.reason}`);
@@ -292,7 +306,7 @@ class AbrovaTrace {
       return;
     }
 
-    const result = await this._httpClient.sendMessage(abrovaTraceMessage);
+    const result = await this._trackSend(this._httpClient.sendMessage(abrovaTraceMessage));
 
     if (!result.success && this._config.debug) {
       console.log(`[AbrovaTrace] Failed to send message: ${result.error || result.reason}`);
@@ -343,15 +357,26 @@ class AbrovaTrace {
     };
   }
 
-  // Flush pending errors (useful before shutdown)
+  // Send everything that is still waiting: errors and messages on their way, buffered
+  // logs and buffered performance spans. Call it before the process exits.
+  // Resolves true when all of it went out within the timeout, false otherwise. Never rejects.
   static async flush(timeout = 5000) {
-    if (!AbrovaTrace._instance?._isInitialized) return true;
+    const instance = AbrovaTrace._instance;
+    if (!instance?._isInitialized) return true;
 
-    // In a real implementation, you might want to wait for pending HTTP requests
-    // For now, we'll just wait a bit for any ongoing requests
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(true), Math.min(timeout, 1000));
+    const work = Promise.all([
+      Promise.all([...instance._pendingSends].map((send) => send.catch(() => {}))),
+      instance._logService ? instance._logService.flush() : true,
+      instance._performanceClient ? instance._performanceClient.flush() : true
+    ]).then(() => true, () => false);
+
+    let timer;
+    const timedOut = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), timeout);
     });
+    const result = await Promise.race([work, timedOut]);
+    clearTimeout(timer);
+    return result;
   }
 
   // ==================== PERFORMANCE ====================
