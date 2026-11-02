@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - 2026-11-02
+
+- Reports its own version correctly: 0.3.0 sent 0.2.4 as the SDK version, and as the release when none was set.
+
 ## 0.3.0 - 2026-11-02
 
 - API tracing: a share of incoming requests (`tracesSampleRate`, 0.1 by default) is sent as a transaction with its spans: Express and NestJS handlers and middleware, PostgreSQL and MySQL queries (text only, never values), Redis commands (command and key), MongoDB, and outbound HTTP (`http`, `https` and `fetch`). The Console shows each route's slowest requests, one request as a timeline, and N+1 queries.

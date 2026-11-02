@@ -318,3 +318,10 @@ describe('AbrovaTraceConfig', () => {
     });
   });
 });
+
+describe('SDK_VERSION', () => {
+  test('is the package version', () => {
+    const { SDK_VERSION } = require('../lib/config/AbrovaTraceConfig');
+    expect(SDK_VERSION).toBe(require('../package.json').version);
+  });
+});

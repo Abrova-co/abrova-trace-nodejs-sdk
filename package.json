@@ -1,6 +1,6 @@
 {
   "name": "@abrova-trace/nodejs-sdk",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AbrovaTrace Node.js SDK for server-side error tracking, API tracing and monitoring",
   "main": "index.js",
   "types": "index.d.ts",

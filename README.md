@@ -109,7 +109,23 @@ AbrovaTrace.logError('Payment gateway timeout', { orderId: 'A-1' });
 
 Call `await AbrovaTrace.close()` before the process exits to send buffered logs and spans.
 
-### Performance tracing
+### API tracing
+
+A share of incoming requests (`tracesSampleRate`, 0.1 by default) is sent as a transaction with its spans: Express and NestJS handlers and middleware, PostgreSQL and MySQL queries (text only, never values), Redis and MongoDB commands, and outbound `http`, `https` and `fetch` requests. The Console shows each route's slowest requests, one request as a timeline, and N+1 queries. Call `init()` before requiring your framework and database clients:
+
+```js
+// instrument.js — require it first: node -r ./instrument.js app.js
+const AbrovaTrace = require('@abrova-trace/nodejs-sdk');
+
+AbrovaTrace.init({
+  apiKey: process.env.ABROVATRACE_API_KEY,
+  serverSecret: process.env.ABROVATRACE_SERVER_SECRET,
+});
+```
+
+Tracing needs Node 18.19+ or 20.6+ and code loaded with `require()`; on older Node it stays off and everything else works.
+
+### Performance spans
 
 `trackOperation` times an async function and reports the result as a span.
 
@@ -137,6 +153,8 @@ Options for `AbrovaTrace.init()`. TypeScript definitions are included.
 | `debug` | `false` | Print SDK activity to the console |
 | `timeout` | `5000` | Request timeout in milliseconds (1000 to 30000) |
 | `sampleRate` | `1.0` | Share of errors and messages to report, from 0.0 to 1.0 |
+| `tracesSampleRate` | `0.1` | Share of incoming requests sent as transactions, from 0.0 to 1.0; `0` turns API tracing off |
+| `tracing` | all `true` | What API tracing times: `sqlQueries`, `redisCommands`, `mongodb`, `httpClientRequests` |
 | `maxBreadcrumbs` | `50` | Breadcrumbs kept in memory (up to 100) |
 | `captureUncaughtExceptions` | `true` | Report uncaught exceptions, then exit the process |
 | `captureUnhandledRejections` | `true` | Report unhandled promise rejections |
