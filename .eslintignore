@@ -1,0 +1,2 @@
+# Built by scripts/build-tracing.mjs from OpenTelemetry: not our source.
+lib/tracing/otel.js

@@ -1,7 +1,7 @@
 {
   "name": "@abrova-trace/nodejs-sdk",
-  "version": "0.2.4",
-  "description": "AbrovaTrace Node.js SDK for server-side error tracking and monitoring",
+  "version": "0.3.0",
+  "description": "AbrovaTrace Node.js SDK for server-side error tracking, API tracing and monitoring",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
@@ -20,7 +20,8 @@
     "example:basic": "node examples/basic-usage.js",
     "example:express": "node examples/express-integration.js",
     "example:database": "node examples/database-example.js",
-    "prepublishOnly": "npm test && npm run lint",
+    "build:tracing": "node scripts/build-tracing.mjs",
+    "prepublishOnly": "npm run build:tracing && npm test && npm run lint",
     "docs": "jsdoc -d docs lib/ index.js"
   },
   "keywords": [
@@ -68,7 +69,22 @@
     }
   },
   "devDependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/core": "2.12.0",
+    "@opentelemetry/instrumentation": "0.223.0",
+    "@opentelemetry/instrumentation-express": "0.71.1",
+    "@opentelemetry/instrumentation-http": "0.223.0",
+    "@opentelemetry/instrumentation-ioredis": "0.71.0",
+    "@opentelemetry/instrumentation-mongodb": "0.76.0",
+    "@opentelemetry/instrumentation-mysql2": "0.69.0",
+    "@opentelemetry/instrumentation-nestjs-core": "0.70.0",
+    "@opentelemetry/instrumentation-pg": "0.76.0",
+    "@opentelemetry/instrumentation-redis": "0.71.0",
+    "@opentelemetry/instrumentation-undici": "0.33.0",
+    "@opentelemetry/sdk-trace-base": "2.12.0",
+    "@opentelemetry/sdk-trace-node": "2.12.0",
     "@types/node": "^18.0.0",
+    "esbuild": "0.28.2",
     "eslint": "^8.0.0",
     "jest": "^29.0.0",
     "jsdoc": "^4.0.0",

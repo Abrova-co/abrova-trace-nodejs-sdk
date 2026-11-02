@@ -82,6 +82,15 @@ export interface AbrovaTraceInitOptions {
   ignoredPaths?: Array<string | RegExp>;
   /** Sample rate for error/message capture (0.0 to 1.0, default: 1.0) */
   sampleRate?: number;
+  /**
+   * API tracing: the share of incoming requests sent as a transaction with their
+   * spans (database queries, Redis, MongoDB, outbound HTTP). 0.1 = one in ten
+   * (the default); 0 turns it off. Needs Node 18.19+ or 20.6+. Call init()
+   * before requiring express, pg and the rest, so they can be timed.
+   */
+  tracesSampleRate?: number;
+  /** What tracing times, all true by default. */
+  tracing?: { sqlQueries?: boolean; redisCommands?: boolean; mongodb?: boolean; httpClientRequests?: boolean };
 }
 
 export interface BreadcrumbOptions {

@@ -8,6 +8,7 @@ const RateLimiter = require('./lib/utils/RateLimiter');
 const { LogService, LogLevel, LogEntry } = require('./lib/logging/LogService');
 const { PerformanceSpan, generateTraceId, generateSpanId } = require('./lib/performance/PerformanceSpan');
 const { PerformanceClient } = require('./lib/performance/PerformanceClient');
+const { Tracing } = require('./lib/tracing');
 
 // The Trace messages table only accepts these four levels.
 const MESSAGE_LEVELS = ['debug', 'info', 'warning', 'error'];
@@ -55,7 +56,13 @@ class AbrovaTrace {
   // Initialize AbrovaTrace
   static init(options) {
     AbrovaTrace._instance = new AbrovaTrace();
-    AbrovaTrace._instance._initialize(options);
+    try {
+      AbrovaTrace._instance._initialize(options);
+    } catch (error) {
+      // A wrong key must never stop the app it watches: tracking turns itself off and says why.
+      console.error(`[AbrovaTrace] Turned off: ${error.message}`);
+      AbrovaTrace._instance._isInitialized = false;
+    }
     return AbrovaTrace._instance;
   }
 
@@ -70,6 +77,17 @@ class AbrovaTrace {
     });
 
     this._sampleRate = options.sampleRate !== undefined ? options.sampleRate : 1.0;
+
+    this._tracing = null;
+    if (this._config.enabled && this._config.tracesSampleRate > 0) {
+      try {
+        this._config.sdkVersion = require('./package.json').version;
+        const tracing = new Tracing(this._config, this._httpClient);
+        if (tracing.start()) this._tracing = tracing;
+      } catch (error) {
+        if (this._config.debug) console.log('[AbrovaTrace] API tracing did not start:', error.message);
+      }
+    }
 
     this._setupErrorHandling();
     this._isInitialized = true;
@@ -367,6 +385,7 @@ class AbrovaTrace {
     const work = Promise.all([
       Promise.all([...instance._pendingSends].map((send) => send.catch(() => {}))),
       instance._logService ? instance._logService.flush() : true,
+      instance._tracing ? instance._tracing.flush() : true,
       instance._performanceClient ? instance._performanceClient.flush() : true
     ]).then(() => true, () => false);
 

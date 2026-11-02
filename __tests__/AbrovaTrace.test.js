@@ -53,12 +53,20 @@ describe('AbrovaTrace', () => {
       expect(AbrovaTrace._instance).toBe(second);
     });
 
-    test('throws when apiKey is missing', () => {
-      expect(() => AbrovaTrace.init({ serverSecret: 'ab_srv_x' })).toThrow();
-    });
-
-    test('throws when serverSecret is missing', () => {
-      expect(() => AbrovaTrace.init({ apiKey: 'ab_live_x' })).toThrow();
+    // A wrong or missing key must never stop the app: tracking turns itself off and says why.
+    test.each([
+      ['apiKey is missing', { serverSecret: 'ab_srv_x' }],
+      ['serverSecret is missing', { apiKey: 'ab_live_x' }],
+      ['the server secret is used as the key', { apiKey: 'ab_srv_x', serverSecret: 'ab_srv_x' }],
+    ])('turns itself off when %s, and the app keeps running', async (_name, options) => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => AbrovaTrace.init(options)).not.toThrow();
+      expect(errorSpy.mock.calls[0][0]).toMatch(/^\[AbrovaTrace\] Turned off: /);
+      expect(AbrovaTrace._instance._isInitialized).toBe(false);
+      expect(() => AbrovaTrace.captureException(new Error('boom'))).not.toThrow();
+      expect(() => AbrovaTrace.addBreadcrumb({ message: 'x' })).not.toThrow();
+      await expect(AbrovaTrace.flush()).resolves.toBeDefined();
+      errorSpy.mockRestore();
     });
 
     test('creates breadcrumb manager', () => {
